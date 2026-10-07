@@ -143,13 +143,14 @@ def merge_auth_headers(
     client_kwargs: dict,
     auth_headers: dict[str, str] | None,
 ) -> None:
-    """Merge authentication headers into client kwargs in-place.
+    """Merge authentication headers into client kwargs.
 
     Args:
         client_kwargs: The client kwargs dict to update.
         auth_headers: Headers to merge (typically from `parse_url_with_auth`).
     """
     if auth_headers:
-        headers = client_kwargs.get("headers", {})
-        headers.update(auth_headers)
-        client_kwargs["headers"] = headers
+        client_kwargs["headers"] = {
+            **client_kwargs.get("headers", {}),
+            **auth_headers,
+        }

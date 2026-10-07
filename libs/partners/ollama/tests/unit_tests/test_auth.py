@@ -3,7 +3,7 @@
 import base64
 from unittest.mock import MagicMock, patch
 
-from langchain_ollama._utils import parse_url_with_auth
+from langchain_ollama._utils import merge_auth_headers, parse_url_with_auth
 from langchain_ollama.chat_models import ChatOllama
 from langchain_ollama.embeddings import OllamaEmbeddings
 from langchain_ollama.llms import OllamaLLM
@@ -119,6 +119,20 @@ class TestParseUrlWithAuth:
         assert cleaned_url == expected_url
         assert headers == expected_headers
 
+    def test_merge_auth_headers_does_not_mutate_original_headers(self) -> None:
+        """Test that merge_auth_headers does not mutate input dict or nested headers."""
+        original_headers = {"User-Agent": "test-agent"}
+        client_kwargs = {"headers": original_headers, "timeout": 30.0}
+        auth_headers = {"Authorization": "Basic dXNlcjpwYXNz"}
+
+        merge_auth_headers(client_kwargs, auth_headers)
+
+        assert original_headers == {"User-Agent": "test-agent"}
+        assert client_kwargs["headers"] == {
+            "User-Agent": "test-agent",
+            "Authorization": "Basic dXNlcjpwYXNz",
+        }
+
 
 class TestChatOllamaUrlAuth:
     """Test URL authentication integration with ChatOllama."""
@@ -174,6 +188,40 @@ class TestChatOllamaUrlAuth:
             host=expected_url, headers=expected_headers
         )
 
+    @patch("langchain_ollama.chat_models.Client")
+    @patch("langchain_ollama.chat_models.AsyncClient")
+    def test_chat_ollama_client_kwargs_not_mutated_and_isolated(
+        self, mock_async_client: MagicMock, mock_client: MagicMock
+    ) -> None:
+        """Test that caller client_kwargs is not mutated or leaked across models."""
+        shared_headers = {"User-Agent": "shared-agent"}
+        shared_kwargs = {"headers": shared_headers}
+
+        ChatOllama(
+            model=MODEL_NAME,
+            base_url="https://user:password@ollama.example.com:11434",
+            client_kwargs=shared_kwargs,
+        )
+
+        assert shared_headers == {"User-Agent": "shared-agent"}
+        assert "Authorization" not in shared_headers
+        assert "Authorization" not in shared_kwargs.get("headers", {})
+
+        ChatOllama(
+            model=MODEL_NAME,
+            base_url="http://localhost:11434",
+            client_kwargs=shared_kwargs,
+        )
+
+        mock_client.assert_called_with(
+            host="http://localhost:11434",
+            headers={"User-Agent": "shared-agent"},
+        )
+        mock_async_client.assert_called_with(
+            host="http://localhost:11434",
+            headers={"User-Agent": "shared-agent"},
+        )
+
 
 class TestOllamaLLMUrlAuth:
     """Test URL authentication integration with OllamaLLM."""
@@ -200,6 +248,40 @@ class TestOllamaLLMUrlAuth:
             host=expected_url, headers=expected_headers
         )
 
+    @patch("langchain_ollama.llms.Client")
+    @patch("langchain_ollama.llms.AsyncClient")
+    def test_ollama_llm_client_kwargs_not_mutated_and_isolated(
+        self, mock_async_client: MagicMock, mock_client: MagicMock
+    ) -> None:
+        """Test that caller client_kwargs is not mutated or leaked across models."""
+        shared_headers = {"User-Agent": "shared-agent"}
+        shared_kwargs = {"headers": shared_headers}
+
+        OllamaLLM(
+            model=MODEL_NAME,
+            base_url="https://user:password@ollama.example.com:11434",
+            client_kwargs=shared_kwargs,
+        )
+
+        assert shared_headers == {"User-Agent": "shared-agent"}
+        assert "Authorization" not in shared_headers
+        assert "Authorization" not in shared_kwargs.get("headers", {})
+
+        OllamaLLM(
+            model=MODEL_NAME,
+            base_url="http://localhost:11434",
+            client_kwargs=shared_kwargs,
+        )
+
+        mock_client.assert_called_with(
+            host="http://localhost:11434",
+            headers={"User-Agent": "shared-agent"},
+        )
+        mock_async_client.assert_called_with(
+            host="http://localhost:11434",
+            headers={"User-Agent": "shared-agent"},
+        )
+
 
 class TestOllamaEmbeddingsUrlAuth:
     """Test URL authentication integration with OllamaEmbeddings."""
@@ -224,6 +306,40 @@ class TestOllamaEmbeddingsUrlAuth:
         mock_client.assert_called_once_with(host=expected_url, headers=expected_headers)
         mock_async_client.assert_called_once_with(
             host=expected_url, headers=expected_headers
+        )
+
+    @patch("langchain_ollama.embeddings.Client")
+    @patch("langchain_ollama.embeddings.AsyncClient")
+    def test_ollama_embeddings_client_kwargs_not_mutated_and_isolated(
+        self, mock_async_client: MagicMock, mock_client: MagicMock
+    ) -> None:
+        """Test that caller client_kwargs is not mutated or leaked across models."""
+        shared_headers = {"User-Agent": "shared-agent"}
+        shared_kwargs = {"headers": shared_headers}
+
+        OllamaEmbeddings(
+            model=MODEL_NAME,
+            base_url="https://user:password@ollama.example.com:11434",
+            client_kwargs=shared_kwargs,
+        )
+
+        assert shared_headers == {"User-Agent": "shared-agent"}
+        assert "Authorization" not in shared_headers
+        assert "Authorization" not in shared_kwargs.get("headers", {})
+
+        OllamaEmbeddings(
+            model=MODEL_NAME,
+            base_url="http://localhost:11434",
+            client_kwargs=shared_kwargs,
+        )
+
+        mock_client.assert_called_with(
+            host="http://localhost:11434",
+            headers={"User-Agent": "shared-agent"},
+        )
+        mock_async_client.assert_called_with(
+            host="http://localhost:11434",
+            headers={"User-Agent": "shared-agent"},
         )
 
 
