@@ -17,7 +17,11 @@ from blockbuster import BlockBuster
 from pydantic import BaseModel
 from typing_extensions import override
 
-from langchain_core.callbacks import CallbackManagerForRetrieverRun, Callbacks
+from langchain_core.callbacks import (
+    AsyncCallbackManagerForRetrieverRun,
+    CallbackManagerForRetrieverRun,
+    Callbacks,
+)
 from langchain_core.callbacks.manager import (
     adispatch_custom_event,
 )
@@ -1682,6 +1686,24 @@ async def test_event_stream_with_retry() -> None:
                 "parent_ids": [],
                 "tags": ["seq:step:1"],
             },
+            {
+                "data": {"error": ValueError("fail"), "input": "success"},
+                "event": "on_chain_error",
+                "metadata": {},
+                "name": "fail",
+                "run_id": "",
+                "parent_ids": [],
+                "tags": ["seq:step:2"],
+            },
+            {
+                "data": {"error": ValueError("fail"), "input": "q"},
+                "event": "on_chain_error",
+                "metadata": {},
+                "name": "RunnableSequence",
+                "run_id": "",
+                "parent_ids": [],
+                "tags": [],
+            },
         ],
     )
 
@@ -2916,3 +2938,159 @@ async def test_tool_error_event_tool_call_id_is_none_when_not_provided() -> None
     assert error_event["name"] == "failing_tool_no_id"
     assert "tool_call_id" in error_event["data"]
     assert error_event["data"]["tool_call_id"] is None
+
+
+async def test_chain_error_event_emitted_on_failure() -> None:
+    """Test that on_chain_error event is emitted when a runnable fails."""
+
+    def fail(x: str) -> str:
+        msg = f"boom: {x}"
+        raise ValueError(msg)
+
+    chain = RunnableLambda(fail)
+    events: list[StreamEvent] = []
+
+    async def collect() -> None:
+        async for event in chain.astream_events("test_input", version="v2"):
+            events.append(event)  # noqa: PERF401
+
+    with pytest.raises(ValueError, match="boom: test_input"):
+        await collect()
+
+    error_events = [e for e in events if e["event"] == "on_chain_error"]
+    assert len(error_events) == 1
+
+    error_event = error_events[0]
+    assert error_event["name"] == "fail"
+    assert isinstance(error_event["data"]["error"], ValueError)
+    assert str(error_event["data"]["error"]) == "boom: test_input"
+    assert error_event["data"]["input"] == "test_input"
+
+
+class _FailingChatModel(GenericFakeChatModel):
+    @override
+    def _generate(self, *args: Any, **kwargs: Any) -> Any:
+        msg = "ChatModel failed"
+        raise ValueError(msg)
+
+    @override
+    async def _agenerate(self, *args: Any, **kwargs: Any) -> Any:
+        msg = "ChatModel failed"
+        raise ValueError(msg)
+
+
+async def test_chat_model_error_event_emitted_on_failure() -> None:
+    """Test that on_chat_model_error is emitted when a chat model errors."""
+    model = _FailingChatModel(messages=iter([]))
+    events: list[StreamEvent] = []
+
+    async def collect() -> None:
+        async for event in model.astream_events("hello", version="v2"):
+            events.append(event)  # noqa: PERF401
+
+    with pytest.raises(ValueError, match="ChatModel failed"):
+        await collect()
+
+    error_events = [e for e in events if e["event"] == "on_chat_model_error"]
+    assert len(error_events) == 1
+
+    error_event = error_events[0]
+    assert error_event["name"] == "_FailingChatModel"
+    assert isinstance(error_event["data"]["error"], ValueError)
+
+
+class _FailingLLM(FakeStreamingListLLM):
+    @override
+    def _generate(self, *args: Any, **kwargs: Any) -> Any:
+        msg = "LLM failed"
+        raise ValueError(msg)
+
+    @override
+    async def _agenerate(self, *args: Any, **kwargs: Any) -> Any:
+        msg = "LLM failed"
+        raise ValueError(msg)
+
+
+async def test_llm_error_event_emitted_on_failure() -> None:
+    """Test that on_llm_error is emitted when a non-chat LLM errors."""
+    llm = _FailingLLM(responses=[])
+    events: list[StreamEvent] = []
+
+    async def collect() -> None:
+        async for event in llm.astream_events("hello", version="v2"):
+            events.append(event)  # noqa: PERF401
+
+    with pytest.raises(ValueError, match="LLM failed"):
+        await collect()
+
+    error_events = [e for e in events if e["event"] == "on_llm_error"]
+    assert len(error_events) == 1
+
+    error_event = error_events[0]
+    assert error_event["name"] == "_FailingLLM"
+    assert isinstance(error_event["data"]["error"], ValueError)
+
+
+class _FailingRetriever(BaseRetriever):
+    @override
+    def _get_relevant_documents(
+        self, query: str, *, run_manager: CallbackManagerForRetrieverRun
+    ) -> list[Document]:
+        msg = f"Retriever failed on {query}"
+        raise ValueError(msg)
+
+    @override
+    async def _aget_relevant_documents(
+        self, query: str, *, run_manager: AsyncCallbackManagerForRetrieverRun
+    ) -> list[Document]:
+        msg = f"Retriever failed on {query}"
+        raise ValueError(msg)
+
+
+async def test_retriever_error_event_emitted_on_failure() -> None:
+    """Test that on_retriever_error is emitted when a retriever errors."""
+    retriever = _FailingRetriever()
+    events: list[StreamEvent] = []
+
+    async def collect() -> None:
+        async for event in retriever.astream_events("query_str", version="v2"):
+            events.append(event)  # noqa: PERF401
+
+    with pytest.raises(ValueError, match="Retriever failed on query_str"):
+        await collect()
+
+    error_events = [e for e in events if e["event"] == "on_retriever_error"]
+    assert len(error_events) == 1
+
+    error_event = error_events[0]
+    assert error_event["name"] == "_FailingRetriever"
+    assert isinstance(error_event["data"]["error"], ValueError)
+
+
+async def test_runnable_with_fallbacks_error_event_on_failed_child() -> None:
+    """Test that failed child in fallbacks emits on_chain_error.
+
+    The overall fallback sequence should still succeed.
+    """
+
+    def fail_step(_: str) -> str:
+        msg = "child failed"
+        raise ValueError(msg)
+
+    def fallback_step(_: str) -> str:
+        return "fallback success"
+
+    chain = RunnableLambda(fail_step).with_fallbacks([RunnableLambda(fallback_step)])
+    events: list[StreamEvent] = []
+
+    async for event in chain.astream_events("hi", version="v2"):
+        events.append(event)  # noqa: PERF401
+
+    error_events = [e for e in events if e["event"] == "on_chain_error"]
+    assert len(error_events) == 1
+    assert error_events[0]["name"] == "fail_step"
+
+    # Overall chain should still complete successfully
+    end_events = [e for e in events if e["event"] == "on_chain_end"]
+    assert any(e["name"] == "fallback_step" for e in end_events)
+    assert any(e["name"] == "RunnableWithFallbacks" for e in end_events)

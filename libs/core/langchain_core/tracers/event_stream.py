@@ -545,6 +545,49 @@ class _AstreamEventsCallbackHandler(
             run_info["run_type"],
         )
 
+    @override
+    async def on_llm_error(
+        self,
+        error: BaseException,
+        *,
+        run_id: UUID,
+        parent_run_id: UUID | None = None,
+        tags: list[str] | None = None,
+        **kwargs: Any,
+    ) -> None:
+        """End a trace for a model run with error.
+
+        For both chat models and non-chat models (legacy text-completion LLMs).
+
+        Raises:
+            ValueError: If the run type is not `'llm'` or `'chat_model'`.
+        """
+        if run_id not in self.run_map:
+            return
+        run_info = self.run_map.pop(run_id)
+        inputs_ = run_info.get("inputs")
+
+        if run_info["run_type"] == "chat_model":
+            event = "on_chat_model_error"
+        elif run_info["run_type"] == "llm":
+            event = "on_llm_error"
+        else:
+            msg = f"Unexpected run type: {run_info['run_type']}"
+            raise ValueError(msg)
+
+        self._send(
+            {
+                "event": event,
+                "data": {"error": error, "input": inputs_},
+                "run_id": str(run_id),
+                "name": run_info["name"],
+                "tags": run_info["tags"],
+                "metadata": run_info["metadata"],
+                "parent_ids": self._get_parent_ids(run_id),
+            },
+            run_info["run_type"],
+        )
+
     async def on_chain_start(
         self,
         serialized: dict[str, Any],
@@ -612,6 +655,44 @@ class _AstreamEventsCallbackHandler(
 
         data: EventData = {
             "output": outputs,
+            "input": inputs,
+        }
+
+        self._send(
+            {
+                "event": event,
+                "data": data,
+                "run_id": str(run_id),
+                "name": run_info["name"],
+                "tags": run_info["tags"],
+                "metadata": run_info["metadata"],
+                "parent_ids": self._get_parent_ids(run_id),
+            },
+            run_type,
+        )
+
+    @override
+    async def on_chain_error(
+        self,
+        error: BaseException,
+        *,
+        run_id: UUID,
+        parent_run_id: UUID | None = None,
+        tags: list[str] | None = None,
+        inputs: Any = None,
+        **kwargs: Any,
+    ) -> None:
+        """End a trace for a chain run with error."""
+        if run_id not in self.run_map:
+            return
+        run_info = self.run_map.pop(run_id)
+        run_type = run_info["run_type"]
+
+        event = f"on_{run_type}_error"
+        inputs = inputs or kwargs.get("inputs") or run_info.get("inputs") or {}
+
+        data: EventData = {
+            "error": error,
             "input": inputs,
         }
 
@@ -803,6 +884,37 @@ class _AstreamEventsCallbackHandler(
                 "event": "on_retriever_end",
                 "data": {
                     "output": documents,
+                    "input": run_info.get("inputs"),
+                },
+                "run_id": str(run_id),
+                "name": run_info["name"],
+                "tags": run_info["tags"],
+                "metadata": run_info["metadata"],
+                "parent_ids": self._get_parent_ids(run_id),
+            },
+            run_info["run_type"],
+        )
+
+    @override
+    async def on_retriever_error(
+        self,
+        error: BaseException,
+        *,
+        run_id: UUID,
+        parent_run_id: UUID | None = None,
+        tags: list[str] | None = None,
+        **kwargs: Any,
+    ) -> None:
+        """Run when `Retriever` errors."""
+        if run_id not in self.run_map:
+            return
+        run_info = self.run_map.pop(run_id)
+
+        self._send(
+            {
+                "event": "on_retriever_error",
+                "data": {
+                    "error": error,
                     "input": run_info.get("inputs"),
                 },
                 "run_id": str(run_id),

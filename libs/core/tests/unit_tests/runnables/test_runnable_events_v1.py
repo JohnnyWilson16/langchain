@@ -63,26 +63,36 @@ async def _collect_events(events: AsyncIterator[StreamEvent]) -> list[StreamEven
     return events_
 
 
+def _normalize_event(
+    e: Mapping[str, Any], expected_e: Mapping[str, Any]
+) -> dict[str, Any]:
+    res = {}
+    for k, v in e.items():
+        if k == "metadata":
+            res[k] = {
+                metadata_k: metadata_v
+                for metadata_k, metadata_v in v.items()
+                if metadata_k in expected_e.get("metadata", {})
+            }
+        elif k == "data" and isinstance(v, Mapping):
+            res[k] = {
+                dk: (type(dv), str(dv)) if isinstance(dv, BaseException) else dv
+                for dk, dv in v.items()
+            }
+        else:
+            res[k] = v
+    return res
+
+
 def _assert_events_equal_allow_superset_metadata(
     events: Sequence[Mapping[str, Any]], expected: Sequence[Mapping[str, Any]]
 ) -> None:
     """Assert that the events are equal."""
     assert len(events) == len(expected)
     for i, (event, expected_event) in enumerate(zip(events, expected, strict=False)):
-        # we want to allow a superset of metadata on each
-        event_with_edited_metadata = {
-            k: (
-                v
-                if k != "metadata"
-                else {
-                    metadata_k: metadata_v
-                    for metadata_k, metadata_v in v.items()
-                    if metadata_k in expected_event["metadata"]
-                }
-            )
-            for k, v in event.items()
-        }
-        assert event_with_edited_metadata == expected_event, f"Event {i} did not match."
+        norm_actual = _normalize_event(event, expected_event)
+        norm_expected = _normalize_event(expected_event, expected_event)
+        assert norm_actual == norm_expected, f"Event {i} did not match."
 
 
 async def test_event_stream_with_simple_function_tool() -> None:
